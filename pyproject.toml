@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dz-speedtest-cli"
+dynamic = ["version", "description", "readme", "license"]
+requires-python = ">=3.8"
+authors = [
+    {name = "DownloaderZone"}
+]
+license-files = ["LICENSE"]
+keywords = ["speedtest", "speedtest.net", "ookla"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+[project.scripts]
+speedtest = "speedtest:main"
+speedtest-cli = "speedtest:main"
+dz-speedtest = "speedtest:main"
+dz-speedtest-cli = "speedtest:main"
+
+[project.urls]
+Homepage = "https://github.com/DownloaderZone/Speedtest-Cli"
+Repository = "https://github.com/DownloaderZone/Speedtest-Cli"
+Issues = "https://github.com/DownloaderZone/Speedtest-Cli/issues"

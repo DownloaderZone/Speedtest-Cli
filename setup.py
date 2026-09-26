@@ -17,28 +17,18 @@
 
 import os
 import re
-import codecs
-
 from setuptools import setup
 
 here = os.path.abspath(os.path.dirname(__file__))
 
 
-# Read the version number from a source file.
-# Why read it, and not import?
-# see https://groups.google.com/d/topic/pypa-dev/0PkjVpcxTzQ/discussion
 def find_version(*file_paths):
-    # Open in Latin-1 so that we avoid encoding errors.
-    # Use codecs.open for Python 2 compatibility
     try:
-        f = codecs.open(os.path.join(here, *file_paths), 'r', 'latin1')
-        version_file = f.read()
-        f.close()
-    except:
+        with open(os.path.join(here, *file_paths), 'r', encoding='latin1') as f:
+            version_file = f.read()
+    except Exception:
         raise RuntimeError("Unable to find version string.")
 
-    # The version line must have the form
-    # __version__ = 'ver'
     version_match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]",
                               version_file, re.M)
     if version_match:
@@ -46,54 +36,51 @@ def find_version(*file_paths):
     raise RuntimeError("Unable to find version string.")
 
 
-# Get the long description from the relevant file
 try:
-    f = codecs.open('README.rst', encoding='utf-8')
-    long_description = f.read()
-    f.close()
-except:
+    with open('README.rst', 'r', encoding='utf-8') as f:
+        long_description = f.read()
+except Exception:
     long_description = ''
 
 
 setup(
-    name='speedtest-cli',
+    name='dz-speedtest-cli',
     version=find_version('speedtest.py'),
     description=('Command line interface for testing internet bandwidth using '
                  'speedtest.net'),
     long_description=long_description,
-    keywords='speedtest speedtest.net',
-    author='Matt Martz',
-    author_email='matt@sivel.net',
-    url='https://github.com/sivel/speedtest-cli',
-    license='Apache License, Version 2.0',
+    long_description_content_type='text/x-rst',
+    keywords='speedtest speedtest.net ookla',
+    author='DownloaderZone',
+    url='https://github.com/DownloaderZone/Speedtest-Cli',
+    project_urls={
+        'Source': 'https://github.com/DownloaderZone/Speedtest-Cli',
+        'Tracker': 'https://github.com/DownloaderZone/Speedtest-Cli/issues',
+    },
+    license='Apache-2.0',
     py_modules=['speedtest'],
+    python_requires='>=3.8',
     entry_points={
         'console_scripts': [
             'speedtest=speedtest:main',
-            'speedtest-cli=speedtest:main'
+            'speedtest-cli=speedtest:main',
+            'dz-speedtest=speedtest:main',
+            'dz-speedtest-cli=speedtest:main'
         ]
     },
     classifiers=[
         'Development Status :: 5 - Production/Stable',
-        'Programming Language :: Python',
         'Environment :: Console',
-        'License :: OSI Approved :: Apache Software License',
         'Operating System :: OS Independent',
-        'Programming Language :: Python :: 2',
-        'Programming Language :: Python :: 2.4',
-        'Programming Language :: Python :: 2.5',
-        'Programming Language :: Python :: 2.6',
-        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.1',
-        'Programming Language :: Python :: 3.2',
-        'Programming Language :: Python :: 3.3',
-        'Programming Language :: Python :: 3.4',
-        'Programming Language :: Python :: 3.5',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3 :: Only',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
+        'Programming Language :: Python :: 3.14',
     ]
 )

@@ -2,38 +2,49 @@
 
 ## Pull requests should be
 
-1. Made against the `devel` branch.
+1. Made against the `master` branch.
 1. Made from a git feature branch.
 
 ## Pull requests will not be accepted that
 
-1. Are not made against the `devel` branch
-1. Are submitted from a branch named `devel`
-1. Do not pass pep8/pyflakes/flake8
-1. Do not work with Python 2.4-3.4 or pypy
-1. Add python modules not included with the Python standard library
+1. Are not made from a git feature branch
+1. Do not pass PEP 8 / flake8 checks
+1. Do not work with supported Python versions (Python 3.8+)
+1. Add external dependencies (all code must rely strictly on the Python standard library)
 1. Are made by editing files via the GitHub website
 
 # Coding Guidelines
 
-In general, I follow strict pep8 and pyflakes. All code must pass these tests. Since we support python 2.4-3.4 and pypy, pyflakes reports unknown names in python 3.  pyflakes is run in python 2.7 only in my tests.
+All code should follow PEP 8 standards.
 
-## Some other points
+## Guidelines
 
-1. Do not use `\` for line continuations, long strings should be wrapped in `()`.  Imports should start a brand new line in the form of `from foo import...`
-1. String quoting should be done with single quotes `'`, except for situations where you would otherwise have to escape an internal single quote
-1. Docstrings should use three double quotes `"""`
-1. All functions, classes and modules should have docstrings following both the PEP257 and PEP8 standards
-1. Inline comments should only be used on code where it is not immediately obvious what the code achieves
+1. Do not use `\` for line continuations; wrap long expressions in parentheses `()`.
+1. String quoting should be done with single quotes `'`, except where escaping an internal single quote is required.
+1. Docstrings should use triple double quotes `"""`.
+1. All public functions, classes, and modules should have informative docstrings.
+1. Inline comments should be used only where logic is non-obvious.
 
 # Supported Python Versions
 
-All code needs to support Python 2.4-3.4 and pypy.
+All code must support Python 3.8+ (including Python 3.8, 3.9, 3.10, 3.11, 3.12, 3.13, and 3.14+). Support for Python 2.x and obsolete Python 3 versions (< 3.8) has been dropped.
 
 # Permitted Python Modules
 
-Only modules included in the standard library are permitted for use in this application.  This application should not be dependent on any 3rd party modules that would need to be installed external to just Python itself.
+Only modules included in the Python standard library are permitted. The application must not depend on any third-party runtime dependencies.
 
 # Testing
 
-Currently there are no unit tests, but they are planned.
+Unit tests are located in `tests/`. Before submitting a pull request, verify that tests pass cleanly with zero warnings:
+
+```bash
+python -W error -m unittest discover tests
+```
+
+You can also run tests across supported environments using `tox`:
+
+```bash
+tox
+```
+
+Repository: https://github.com/DownloaderZone/Speedtest-Cli

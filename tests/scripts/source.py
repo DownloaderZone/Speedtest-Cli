@@ -31,7 +31,17 @@ stdout, stderr = p.communicate()
 if p.returncode != 1:
     raise SystemExit('%s did not fail with exit code 1' % ' '.join(cmd))
 
-if 'Invalid argument'.encode() not in stderr:
+expected_errors = [
+    b'Invalid argument',
+    b'WinError 10051',
+    b'WinError 10049',
+    b'unreachable network',
+    b'Cannot assign requested address',
+    b"Can't assign requested address",
+    b'Network is unreachable'
+]
+
+if not any(err in stderr for err in expected_errors):
     raise SystemExit(
-        '"Invalid argument" not found in stderr:\n%s' % stderr.decode()
+        'Expected source binding error not found in stderr:\n%s' % stderr.decode()
     )
