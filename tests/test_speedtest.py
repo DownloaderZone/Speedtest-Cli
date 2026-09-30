@@ -162,7 +162,7 @@ class TestServerSelection(unittest.TestCase):
 class TestSpeedtestCLI(unittest.TestCase):
     def test_version_constants(self):
         self.assertTrue(hasattr(speedtest, '__version__'))
-        self.assertEqual(speedtest.__version__, '2.2.0')
+        self.assertEqual(speedtest.__version__, '2.2.1')
         self.assertTrue(hasattr(speedtest, 'PY311PLUS'))
         self.assertTrue(hasattr(speedtest, 'PY312PLUS'))
         self.assertTrue(hasattr(speedtest, 'PY313PLUS'))
