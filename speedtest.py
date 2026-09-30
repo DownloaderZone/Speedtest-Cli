@@ -24,6 +24,7 @@ import platform
 import re
 import signal
 import socket
+import statistics
 import subprocess
 import sys
 import threading
@@ -393,6 +394,7 @@ def distance(origin, destination):
          math.cos(math.radians(lat1)) *
          math.cos(math.radians(lat2)) * math.sin(dlon / 2) *
          math.sin(dlon / 2))
+    a = min(1.0, max(0.0, a))
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     d = radius * c
 
@@ -443,6 +445,7 @@ def build_request(url, data=None, headers=None, bump='0', secure=False):
 
     headers.update({
         'Cache-Control': 'no-cache',
+        'User-Agent': build_user_agent(),
     })
 
     printer('%s %s' % (('GET', 'POST')[bool(data)], final_url),
@@ -541,20 +544,24 @@ class HTTPDownloader(threading.Thread):
             self._shutdown_event = FakeShutdownEvent()
 
     def run(self):
+        f = None
         try:
-            if (timeit.default_timer() - self.starttime) <= self.timeout:
+            if (not event_is_set(self._shutdown_event) and
+                    (timeit.default_timer() - self.starttime) <= self.timeout):
                 f = self._opener(self.request)
                 while (not event_is_set(self._shutdown_event) and
                         (timeit.default_timer() - self.starttime) <=
                         self.timeout):
-                    self.result.append(len(f.read(10240)))
+                    self.result.append(len(f.read(65536)))
                     if self.result[-1] == 0:
                         break
-                f.close()
         except IOError:
             pass
         except HTTP_ERRORS:
             pass
+        finally:
+            if f is not None:
+                f.close()
 
 
 class HTTPUploaderData(object):
@@ -578,7 +585,7 @@ class HTTPUploaderData(object):
 
     def pre_allocate(self):
         chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-        multiplier = int(round(int(self.length) / 36.0))
+        multiplier = (int(self.length) + 35) // 36
         IO = BytesIO or StringIO
         try:
             self._data = IO(
@@ -822,7 +829,9 @@ class Speedtest(object):
     """Class for performing standard speedtest.net testing operations"""
 
     def __init__(self, config=None, source_address=None, timeout=10,
-                 secure=False, shutdown_event=None):
+                 secure=False, shutdown_event=None, location=None):
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise SpeedtestConfigError('Timeout must be a positive finite number')
         self.config = {}
 
         self._source_address = source_address
@@ -839,6 +848,16 @@ class Speedtest(object):
         self.get_config()
         if config is not None:
             self.config.update(config)
+
+        if location is not None:
+            try:
+                lat, lon = map(float, location)
+                if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                    raise ValueError()
+            except (TypeError, ValueError):
+                raise SpeedtestConfigError('Location must be valid latitude and longitude')
+            self.lat_lon = (lat, lon)
+            self.config['client'].update({'lat': str(lat), 'lon': str(lon)})
 
         self.servers = {}
         self.closest = []
@@ -864,7 +883,7 @@ class Speedtest(object):
         headers = {}
         if gzip:
             headers['Accept-Encoding'] = 'gzip'
-        request = build_request('://www.speedtest.net/speedtest-config.php',
+        request = build_request('https://www.speedtest.net/speedtest-config.php',
                                 headers=headers, secure=self._secure)
         uh, e = catch_request(request, opener=self._opener)
         if e:
@@ -972,7 +991,7 @@ class Speedtest(object):
 
         return self.config
 
-    def get_servers(self, servers=None, exclude=None, host=None):
+    def get_servers(self, servers=None, exclude=None, host=None, full=False):
         """Retrieve a the list of speedtest.net servers, optionally filtered
         to servers matching those specified in the ``servers`` argument,
         excluding those in ``exclude``, or matching ``host``
@@ -983,23 +1002,32 @@ class Speedtest(object):
         if exclude is None:
             exclude = []
 
+        servers = list(servers)
+        exclude = list(exclude)
         self.servers.clear()
+        self.closest = []
+        self._best.clear()
+        self.results.server = {}
+        self.results.ping = 0
 
         for server_list in (servers, exclude):
             for i, s in enumerate(server_list):
                 try:
                     server_list[i] = int(s)
-                except ValueError:
+                except (TypeError, ValueError):
                     raise InvalidServerIDType(
                         '%s is an invalid server type, must be int' % s
                     )
 
         urls = [
-            '://www.speedtest.net/speedtest-servers-static.php',
-            'http://c.speedtest.net/speedtest-servers-static.php',
-            '://www.speedtest.net/speedtest-servers.php',
-            'http://c.speedtest.net/speedtest-servers.php',
+            'https://www.speedtest.net/speedtest-servers-static.php',
+            'https://c.speedtest.net/speedtest-servers-static.php',
+            'https://www.speedtest.net/speedtest-servers.php',
+            'https://c.speedtest.net/speedtest-servers.php',
         ]
+        if not full and not servers and not host:
+            urls.insert(0, 'https://www.speedtest.net/api/js/servers'
+                        '?engine=js&limit=100&lat=%s&lon=%s' % self.lat_lon)
 
         headers = {}
         if gzip:
@@ -1009,7 +1037,7 @@ class Speedtest(object):
         for url in urls:
             try:
                 request = build_request(
-                    '%s?threads=%s' % (url,
+                    '%s%sthreads=%s' % (url, '&' if '?' in url else '?',
                                        self.config['threads']['download']),
                     headers=headers,
                     secure=self._secure
@@ -1040,54 +1068,50 @@ class Speedtest(object):
 
                 printer('Servers XML:\n%s' % serversxml, debug=True)
 
-                try:
+                if '/api/js/servers' in url:
                     try:
-                        try:
-                            root = ET.fromstring(serversxml)
-                        except ET.ParseError:
-                            e = get_exception()
-                            raise SpeedtestServersError(
-                                'Malformed speedtest.net server list: %s' % e
-                            )
+                        elements = json.loads(serversxml.decode('utf-8'))
+                        if not isinstance(elements, list):
+                            raise ValueError('Expected a server list')
+                    except (ValueError, UnicodeError) as e:
+                        errors.append(str(e))
+                        continue
+                else:
+                    try:
+                        root = ET.fromstring(serversxml)
                         elements = etree_iter(root, 'server')
-                    except AttributeError:
-                        try:
-                            root = DOM.parseString(serversxml)
-                        except ExpatError:
-                            e = get_exception()
-                            raise SpeedtestServersError(
-                                'Malformed speedtest.net server list: %s' % e
-                            )
-                        elements = root.getElementsByTagName('server')
-                    except (SyntaxError, xml.parsers.expat.ExpatError):
-                        raise ServersRetrievalError()
-                except (SyntaxError, xml.parsers.expat.ExpatError):
-                    raise ServersRetrievalError()
+                    except ET.ParseError as e:
+                        errors.append(str(e))
+                        continue
 
                 for server in elements:
                     try:
-                        attrib = server.attrib
-                    except AttributeError:
-                        attrib = dict(list(server.attributes.items()))
-
-                    if servers and int(attrib.get('id')) not in servers:
+                        attrib = dict(server if isinstance(server, dict) else server.attrib)
+                        server_id = int(attrib['id'])
+                        lat, lon = float(attrib['lat']), float(attrib['lon'])
+                        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                            continue
+                        parts = urlparse(attrib['url'])
+                        if parts.scheme not in ('http', 'https') or not parts.hostname:
+                            continue
+                    except (KeyError, TypeError, ValueError):
                         continue
 
-                    if (int(attrib.get('id')) in self.config['ignore_servers']
-                            or int(attrib.get('id')) in exclude):
+                    if servers and server_id not in servers:
+                        continue
+
+                    if (server_id in self.config['ignore_servers']
+                            or server_id in exclude):
                         continue
 
                     if host:
-                        server_host = attrib.get('host', '')
-                        if server_host != host and not server_host.startswith(host):
+                        server_host = attrib.get('host', parts.netloc)
+                        if host.lower() not in (server_host.lower(),
+                                                server_host.rsplit(':', 1)[0].lower(),
+                                                parts.netloc.lower(), parts.hostname.lower()):
                             continue
 
-                    try:
-                        d = distance(self.lat_lon,
-                                     (float(attrib.get('lat')),
-                                      float(attrib.get('lon'))))
-                    except Exception:
-                        continue
+                    d = distance(self.lat_lon, (lat, lon))
 
                     attrib['d'] = d
 
@@ -1096,13 +1120,17 @@ class Speedtest(object):
                     except KeyError:
                         self.servers[d] = [attrib]
 
-                break
+                if self.servers:
+                    break
 
             except ServersRetrievalError:
                 continue
 
         if (servers or exclude or host) and not self.servers:
             raise NoMatchedServers()
+
+        if not self.servers:
+            raise ServersRetrievalError('No usable servers retrieved. %s' % '; '.join(errors))
 
         return self.servers
 
@@ -1165,11 +1193,14 @@ class Speedtest(object):
         geographic distance
         """
 
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError('Server limit must be a positive integer')
         if not self.servers:
             self.get_servers()
 
+        self.closest = []
         for d in sorted(self.servers.keys()):
-            for s in self.servers[d]:
+            for s in sorted(self.servers[d], key=lambda s: int(s['id'])):
                 self.closest.append(s)
                 if len(self.closest) == limit:
                     break
@@ -1180,15 +1211,21 @@ class Speedtest(object):
         printer('Closest Servers:\n%r' % self.closest, debug=True)
         return self.closest
 
-    def get_best_server(self, servers=None):
-        """Perform a speedtest.net "ping" to determine which speedtest.net
-        server has the lowest latency
-        """
+    def get_best_server(self, servers=None, selection='nearest'):
+        """Select the nearest reachable server, or lowest-latency nearby server.
 
-        if not servers:
-            if not self.closest:
-                servers = self.get_closest_servers()
-            servers = self.closest
+        Latency is the median HTTP round-trip time, including the response body.
+        """
+        if selection not in ('nearest', 'latency'):
+            raise ValueError('Selection must be nearest or latency')
+        if servers is None:
+            if not self.servers:
+                self.get_servers()
+            servers = [s for d in sorted(self.servers) for s in self.servers[d]]
+        servers = sorted(servers, key=lambda s: (s.get('d', 0), int(s['id'])))
+        self._best.clear()
+        self.results.server = {}
+        self.results.ping = 0
 
         if self._source_address:
             source_address_tuple = (self._source_address, 0)
@@ -1197,8 +1234,12 @@ class Speedtest(object):
 
         user_agent = build_user_agent()
 
-        results = {}
+        results = []
         for server in servers:
+            if event_is_set(self._shutdown_event):
+                break
+            if selection == 'nearest' and results and server.get('d', 0) > results[0][1]:
+                break
             cum = []
             url = os.path.dirname(server['url'])
             stamp = int(timeit.time.time() * 1000)
@@ -1207,46 +1248,48 @@ class Speedtest(object):
                 this_latency_url = '%s.%s' % (latency_url, i)
                 printer('%s %s' % ('GET', this_latency_url),
                         debug=True)
-                urlparts = urlparse(latency_url)
+                urlparts = urlparse(this_latency_url)
+                h = None
                 try:
                     if urlparts[0] == 'https':
                         h = SpeedtestHTTPSConnection(
                             urlparts[1],
-                            source_address=source_address_tuple
+                            source_address=source_address_tuple,
+                            timeout=min(self._timeout, 3)
                         )
                     else:
                         h = SpeedtestHTTPConnection(
                             urlparts[1],
-                            source_address=source_address_tuple
+                            source_address=source_address_tuple,
+                            timeout=min(self._timeout, 3)
                         )
                     headers = {'User-Agent': user_agent}
                     path = '%s?%s' % (urlparts[2], urlparts[4])
                     start = timeit.default_timer()
                     h.request("GET", path, headers=headers)
                     r = h.getresponse()
+                    text = r.read(9)
                     total = (timeit.default_timer() - start)
+                    if int(r.status) == 200 and text == b'test=test':
+                        cum.append(total * 1000.0)
                 except HTTP_ERRORS:
                     e = get_exception()
                     printer('ERROR: %r' % e, debug=True)
-                    cum.append(3600)
-                    continue
+                finally:
+                    if h is not None:
+                        h.close()
 
-                text = r.read(9)
-                if int(r.status) == 200 and text == 'test=test'.encode():
-                    cum.append(total)
-                else:
-                    cum.append(3600)
-                h.close()
+            if len(cum) >= 2:
+                latency = statistics.median(cum)
+                results.append((latency, server.get('d', 0), int(server['id']), server))
+            if selection == 'latency' and len(results) >= 20:
+                break
 
-            avg = round((sum(cum) / 6) * 1000.0, 3)
-            results[avg] = server
-
-        try:
-            fastest = sorted(results.keys())[0]
-        except IndexError:
+        if not results:
             raise SpeedtestBestServerFailure('Unable to connect to servers to '
-                                             'test latency.')
-        best = results[fastest]
+                                              'test latency.')
+        latency, _, _, best = min(results, key=lambda r: r[:3])
+        fastest = round(latency, 3)
         best['latency'] = fastest
 
         self.results.ping = fastest
@@ -1277,7 +1320,7 @@ class Speedtest(object):
             )
 
         max_threads = threads or self.config['threads']['download']
-        in_flight = {'threads': 0}
+        slots = threading.Semaphore(max_threads)
 
         def producer(q, requests, request_count):
             for i, request in enumerate(requests):
@@ -1289,11 +1332,9 @@ class Speedtest(object):
                     opener=self._opener,
                     shutdown_event=self._shutdown_event
                 )
-                while in_flight['threads'] >= max_threads:
-                    timeit.time.sleep(0.001)
+                slots.acquire()
                 thread.start()
                 q.put(thread, True)
-                in_flight['threads'] += 1
                 callback(i, request_count, start=True)
 
         finished = []
@@ -1304,7 +1345,7 @@ class Speedtest(object):
                 thread = q.get(True)
                 while _is_alive(thread):
                     thread.join(timeout=0.001)
-                in_flight['threads'] -= 1
+                slots.release()
                 finished.append(sum(thread.result))
                 callback(thread.i, request_count, end=True)
 
@@ -1324,6 +1365,8 @@ class Speedtest(object):
 
         stop = timeit.default_timer()
         self.results.bytes_received = sum(finished)
+        if not self.results.bytes_received:
+            raise SpeedtestCLIError('Download failed: the selected server returned no test data')
         self.results.download = (
             (self.results.bytes_received / (stop - start)) * 8.0
         )
@@ -1345,7 +1388,7 @@ class Speedtest(object):
                 sizes.append(size)
 
         # request_count = len(sizes)
-        request_count = self.config['upload_max']
+        request_count = min(len(sizes), self.config['upload_max'])
 
         requests = []
         for i, size in enumerate(sizes):
@@ -1370,7 +1413,7 @@ class Speedtest(object):
             )
 
         max_threads = threads or self.config['threads']['upload']
-        in_flight = {'threads': 0}
+        slots = threading.Semaphore(max_threads)
 
         def producer(q, requests, request_count):
             for i, request in enumerate(requests[:request_count]):
@@ -1383,11 +1426,9 @@ class Speedtest(object):
                     opener=self._opener,
                     shutdown_event=self._shutdown_event
                 )
-                while in_flight['threads'] >= max_threads:
-                    timeit.time.sleep(0.001)
+                slots.acquire()
                 thread.start()
                 q.put(thread, True)
-                in_flight['threads'] += 1
                 callback(i, request_count, start=True)
 
         finished = []
@@ -1398,7 +1439,7 @@ class Speedtest(object):
                 thread = q.get(True)
                 while _is_alive(thread):
                     thread.join(timeout=0.001)
-                in_flight['threads'] -= 1
+                slots.release()
                 finished.append(thread.result)
                 callback(thread.i, request_count, end=True)
 
@@ -1418,6 +1459,8 @@ class Speedtest(object):
 
         stop = timeit.default_timer()
         self.results.bytes_sent = sum(finished)
+        if not self.results.bytes_sent:
+            raise SpeedtestCLIError('Upload failed: no test data could be sent to the selected server')
         self.results.upload = (
             (self.results.bytes_sent / (stop - start)) * 8.0
         )
@@ -1661,6 +1704,10 @@ def parse_args():
                         help=ARG_SUPPRESS, default=ARG_SUPPRESS)
     parser.add_argument('--selection-details', action='store_true', default=False,
                         help='Show details of the server selection')
+    parser.add_argument('--selection', choices=['nearest', 'latency'], default='nearest',
+                        help='Select nearest reachable server (default) or lowest-latency nearby server')
+    parser.add_argument('--location', nargs=2, type=float, metavar=('LAT', 'LON'),
+                        help='Override IP geolocation with your latitude and longitude')
     parser.add_argument('--accept-license', action='store_true', default=False,
                         help='Acknowledge license (for compatibility with Ookla CLI)')
     parser.add_argument('--accept-gdpr', action='store_true', default=False,
@@ -1734,7 +1781,11 @@ def shell():
     # Official Ookla CLI delegation
     # By default, always use official Ookla CLI if available!
     official_cli = find_official_cli()
-    if official_cli and not args.pure_python and not os.environ.get('SPEEDTEST_PURE_PYTHON'):
+    custom_selection = args.location is not None or '--selection' in sys.argv or any(
+        a.startswith('--selection=') for a in sys.argv)
+    if args.official and custom_selection:
+        raise SpeedtestCLIError('--selection and --location require the Python engine')
+    if official_cli and not custom_selection and not args.pure_python and not os.environ.get('SPEEDTEST_PURE_PYTHON'):
         sys.exit(run_official_cli(official_cli))
 
     if args.official and not official_cli:
@@ -1818,7 +1869,9 @@ def shell():
         speedtest = Speedtest(
             source_address=args.source,
             timeout=args.timeout,
-            secure=args.secure
+            secure=args.secure,
+            shutdown_event=shutdown_event,
+            location=args.location
         )
     except (ConfigRetrievalError,) + HTTP_ERRORS:
         printer('Cannot retrieve speedtest configuration', error=True)
@@ -1826,7 +1879,7 @@ def shell():
 
     if args.list:
         try:
-            speedtest.get_servers(host=args.host)
+            speedtest.get_servers(servers=args.server, exclude=args.exclude, host=args.host, full=True)
         except (ServersRetrievalError,) + HTTP_ERRORS:
             printer('Cannot retrieve speedtest server list', error=True)
             raise SpeedtestCLIError(get_exception())
@@ -1869,8 +1922,9 @@ def shell():
         if args.server and len(args.server) == 1:
             printer('Retrieving information for the selected server...', quiet)
         else:
-            printer('Selecting best server based on ping...', quiet)
-        speedtest.get_best_server()
+            printer('Selecting %s reachable server...' %
+                    ('nearest' if args.selection == 'nearest' else 'lowest-latency'), quiet)
+        speedtest.get_best_server(selection=args.selection)
     elif args.mini:
         speedtest.get_best_server(speedtest.set_mini_server(args.mini))
 
@@ -1878,6 +1932,8 @@ def shell():
 
     if args.selection_details:
         printer('Server Selection Details:\n'
+                '  Mode: ' + args.selection + '\n'
+                '  Client coordinates: %s, %s\n' % speedtest.lat_lon +
                 '  ID: %(id)s\n'
                 '  Host: %(host)s\n'
                 '  Sponsor: %(sponsor)s\n'

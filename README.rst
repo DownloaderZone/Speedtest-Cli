@@ -148,10 +148,38 @@ Usage
 Inconsistency
 -------------
 
+Server selection
+~~~~~~~~~~~~~~~~
+
+The Python engine discovers current nearby servers and selects the **nearest
+reachable server** by geographic distance. Servers at the same distance are
+compared using the median of three HTTP round-trip measurements. Unreachable
+servers are skipped. Discovery falls back to the legacy server catalog if the
+current API is unavailable.
+
+To inspect the selection::
+
+    python speedtest.py --pure-python --selection-details
+
+If your ISP's IP geolocation points to the wrong city, supply your actual
+latitude and longitude (the coordinates below are an example)::
+
+    python speedtest.py --location 30.9010 75.8573 --selection-details
+
+To compare nearby servers by latency instead of choosing the nearest::
+
+    python speedtest.py --selection latency --selection-details
+
+``--location`` and ``--selection`` automatically use the Python engine. Without
+these flags, an installed official Ookla binary still uses its own selection.
+Distances depend on client and server coordinates; IP geolocation is an estimate.
+
+Measurement differences
+~~~~~~~~~~~~~~~~~~~~~~~
+
 It is not a goal of this application to be a reliable latency reporting tool.
 
-Latency reported by this tool should not be relied on as a value indicative of ICMP
-style latency. It is a relative value used for determining the lowest latency server
-for performing the actual speed test against.
+Latency is measured as a full HTTP round trip, including connection setup and
+reading the latency response. It is not an ICMP ping measurement.
 
 There is the potential for pure Python HTTP-based tests to report results lower than official socket-based tests on high bandwidth connections (gigabit+). For official line rates, install the official Ookla CLI via the instructions above.
